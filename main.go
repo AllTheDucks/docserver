@@ -11,12 +11,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
+	"regexp"
 	"strconv"
+	"strings"
 	"text/template"
 )
 
-var selectStatement = "select name, domain from institutions limit 10"
+var h1RegEx = regexp.MustCompile("<[\\w]*h1.*[\\w]*>(.*)</[\\w]*h1[\\w]*>")
 
 func main() {
 	var docsDirPath string
@@ -52,7 +53,7 @@ func main() {
 	fileServer := http.FileServer(http.Dir(docsDirPath))
 	http.Handle("/", &MarkdownHandler{FileRoot: docsDir.Name(), FileServer: fileServer})
 
-	log.Fatal(http.ListenAndServe(":" + strconv.Itoa(port), nil))
+	log.Fatal(http.ListenAndServe(":"+strconv.Itoa(port), nil))
 }
 
 type MarkdownHandler struct {
@@ -84,8 +85,8 @@ func (h *MarkdownHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header()["Content-Type"] = []string{"text/html"}
 
-	flags := blackfriday.HTML_TOC | blackfriday.HTML_GITHUB_BLOCKCODE 
-	
+	flags := blackfriday.HTML_TOC | blackfriday.HTML_GITHUB_BLOCKCODE
+
 	extensions := 0
 	extensions |= blackfriday.EXTENSION_NO_INTRA_EMPHASIS
 	extensions |= blackfriday.EXTENSION_TABLES
@@ -95,19 +96,24 @@ func (h *MarkdownHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	extensions |= blackfriday.EXTENSION_SPACE_HEADERS
 
 	body, _ := ioutil.ReadFile(mdFilename)
-	output := blackfriday.Markdown(body, blackfriday.HtmlRenderer( flags,"",""), extensions)
-	
-	navClosingTag := []byte{'<','/','n','a','v','>'}
+	output := blackfriday.Markdown(body, blackfriday.HtmlRenderer(flags, "", ""), extensions)
+
+	navClosingTag := []byte{'<', '/', 'n', 'a', 'v', '>'}
 	navMarker := bytes.Index(output, navClosingTag)
 	navMarker = navMarker + len(navClosingTag)
-	
-	toc := output[:navMarker]
-	content := output[navMarker:] 
 
+	toc := output[:navMarker]
+	content := output[navMarker:]
+
+	var title []byte
+	if headingSearch := h1RegEx.FindSubmatch(content); headingSearch != nil && len(headingSearch) >= 2 {
+		title = headingSearch[1]
+	}
 
 	data := make(map[string]string)
 	data["content"] = string(content)
 	data["toc"] = string(toc)
+	data["title"] = string(title)
 
 	t, _ := template.ParseFiles(filepath.Join(h.FileRoot, "template.html"))
 
