@@ -75,8 +75,6 @@ func (h *MarkdownHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		//check for .md version of file, if it exists, serve.
 		mdFilename = strings.TrimSuffix(resourcePath, ".html")
 		mdFilename = mdFilename + ".md"
-	} else if strings.HasSuffix(rp, ".md") {
-		mdFilename = filepath.Join(h.FileRoot, rp)
 	} else {
 		h.FileServer.ServeHTTP(w, r)
 		return
