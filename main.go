@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"strconv"
 	"text/template"
 )
 
@@ -19,7 +20,10 @@ var selectStatement = "select name, domain from institutions limit 10"
 
 func main() {
 	var docsDirPath string
+	var port int
+
 	flag.StringVar(&docsDirPath, "docsdir", "", "Root Directory for all the Docs")
+	flag.IntVar(&port, "port", 9000, "Port to run the server on")
 	flag.Parse()
 
 	if docsDirPath == "" {
@@ -48,7 +52,7 @@ func main() {
 	fileServer := http.FileServer(http.Dir(docsDirPath))
 	http.Handle("/", &MarkdownHandler{FileRoot: docsDir.Name(), FileServer: fileServer})
 
-	http.ListenAndServe(":9000", nil)
+	log.Fatal(http.ListenAndServe(":" + strconv.Itoa(port), nil))
 }
 
 type MarkdownHandler struct {
