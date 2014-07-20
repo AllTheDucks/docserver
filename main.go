@@ -232,8 +232,6 @@ func addUser(path string, usersMap map[string][]byte) {
     	panic(err)
     }
 
-    log.Printf("Saving Hash: '%v'", passwordHash)
-
     usersMap[username] = passwordHash
 
     encodeUserFile(path, usersMap)
@@ -267,7 +265,6 @@ func encodeUserFile(path string, users map[string][]byte) error {
 	encoder := gob.NewEncoder(file)
 
 	if err := encoder.Encode(users); err != nil {
-		log.Printf("err: %v", err)
 		return err
 	}
 
@@ -299,12 +296,7 @@ func requiresAuth(w http.ResponseWriter, r *http.Request, users map[string][]byt
 	password := credentials[1]
 	storedHash := users[username]
 
-	log.Printf("Username: '%v'", username)
-	log.Printf("Password: '%v'", password)
-	log.Printf("Stored Hash: '%v'", storedHash)
-
 	if err := bcrypt.CompareHashAndPassword(storedHash, []byte(password)); err != nil {
-		log.Printf("Error: %v", err)
 		sendAuthHeaders(w)
 		return true
 	}
