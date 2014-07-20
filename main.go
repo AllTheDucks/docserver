@@ -3,21 +3,21 @@ package main
 import (
 	"bytes"
 	"flag"
-	// "fmt"
+	"fmt"
 	"github.com/russross/blackfriday"
-	// "github.com/shurcooL/go/github_flavored_markdown"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
+	"strconv"
 	"text/template"
+	htmltemplate "html/template"
+	"regexp"
 )
 
-var h1RegEx = regexp.MustCompile("<[\\w]*h1.*[\\w]*>(.*)</[\\w]*h1[\\w]*>")
+var h1RegEx = regexp.MustCompile("<[\\w]*h1.*>(.*)</[\\w]*h1[\\w]*>")	
 
 func main() {
 	var docsDirPath string
@@ -50,41 +50,84 @@ func main() {
 		return
 	}
 
+	editServer := http.FileServer(http.Dir("editor"))
 	fileServer := http.FileServer(http.Dir(docsDirPath))
-	http.Handle("/", &MarkdownHandler{FileRoot: docsDir.Name(), FileServer: fileServer})
 
-	log.Fatal(http.ListenAndServe(":"+strconv.Itoa(port), nil))
+ 	http.Handle("/editor/", http.StripPrefix("/editor/",editServer)) 
+	http.Handle("/", &MarkdownHandler{FileRoot: docsDir.Name(), FileServer: fileServer, EditServer: editServer})
+
+	log.Fatal(http.ListenAndServe(":" + strconv.Itoa(port), nil))
 }
 
 type MarkdownHandler struct {
 	FileServer http.Handler
+	EditServer http.Handler
 	FileRoot   string
 }
 
 func (h *MarkdownHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rp := r.URL.Path
 
-	resourcePath := filepath.Join(h.FileRoot, rp)
-
-	var mdFilename string
+	var hasMdFile = false
+	var filename, mdUrl string
 	if strings.HasSuffix(rp, ".html") {
-		//check for existence of html file, if it exists, serve.
-		if _, err := os.Stat(resourcePath); err == nil {
-			h.FileServer.ServeHTTP(w, r)
+		mdUrl = strings.TrimSuffix(rp, ".html") + ".md"
+		filename = filepath.Join(h.FileRoot, mdUrl)
+
+		if _, err := os.Stat(filename); err == nil {
+			hasMdFile = true;
+		}
+	} 
+
+	if !hasMdFile {
+		filename = filepath.Join(h.FileRoot, rp)
+	}
+
+	if r.Method == "POST" {
+		if err := os.MkdirAll(filepath.Dir(filename), 0744); err != nil {
+			log.Printf("Error Making Directories: %v %v", filename, err)
 			return
 		}
-		//check for .md version of file, if it exists, serve.
-		mdFilename = strings.TrimSuffix(resourcePath, ".html")
-		mdFilename = mdFilename + ".md"
-	} else {
+
+		body, err := ioutil.ReadAll(r.Body)
+		if err == nil {
+			ioutil.WriteFile(filename, body, 0644)
+		}
+		return
+	}
+
+	r.ParseForm()
+	_, editMode := r.Form["edit"]
+
+	if editMode {
+		if hasMdFile {
+			w.Header()["Location"] = []string{fmt.Sprintf("%s?%s", mdUrl, r.URL.RawQuery)}
+			w.WriteHeader(http.StatusFound)
+		}
+		w.Header()["Content-Type"] = []string{"text/html"}
+
+		t, _ := htmltemplate.ParseFiles("editor/editor.html")
+
+		content, _ := ioutil.ReadFile(filename)
+
+		data := make(map[string]string)
+		data["path"] = rp;
+		data["content"] = string(content)
+
+
+		t.Execute(w, data)
+		return
+	}
+
+	if !hasMdFile {
 		h.FileServer.ServeHTTP(w, r)
 		return
 	}
 
 	w.Header()["Content-Type"] = []string{"text/html"}
 
-	flags := blackfriday.HTML_TOC | blackfriday.HTML_GITHUB_BLOCKCODE
-
+	flags := blackfriday.HTML_TOC | blackfriday.HTML_GITHUB_BLOCKCODE 
+	
 	extensions := 0
 	extensions |= blackfriday.EXTENSION_NO_INTRA_EMPHASIS
 	extensions |= blackfriday.EXTENSION_TABLES
@@ -93,13 +136,13 @@ func (h *MarkdownHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	extensions |= blackfriday.EXTENSION_STRIKETHROUGH
 	extensions |= blackfriday.EXTENSION_SPACE_HEADERS
 
-	body, _ := ioutil.ReadFile(mdFilename)
-	output := blackfriday.Markdown(body, blackfriday.HtmlRenderer(flags, "", ""), extensions)
-
-	navClosingTag := []byte{'<', '/', 'n', 'a', 'v', '>'}
+	body, _ := ioutil.ReadFile(filename)
+	output := blackfriday.Markdown(body, blackfriday.HtmlRenderer( flags,"",""), extensions)
+	
+	navClosingTag := []byte{'<','/','n','a','v','>'}
 	navMarker := bytes.Index(output, navClosingTag)
 	navMarker = navMarker + len(navClosingTag)
-
+	
 	toc := output[:navMarker]
 	content := output[navMarker:]
 
