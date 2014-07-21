@@ -7,8 +7,9 @@
 body {
 	margin: 0;
 	font-family: Arial, helvetica, sans-serif;
+	position: inherit;
 }
-h1 {
+.titlebar h1 {
     margin: 0 1em ;
 }
 
@@ -16,10 +17,28 @@ h1 {
 	position: absolute;
 	top: 3em;
 	left: 0;
+	width: 50%;
+	bottom: 3em;
+	border: 0 solid #999;
+	border-width: 1px 1px 1px 0;
+}
+
+.previewContainer {
+	position: absolute;
+	top: 3em;
 	right: 0;
+	width: 50%;
 	bottom: 3em;
 	border: 0 solid #999;
 	border-width: 1px 0;
+	overflow-y: scroll;
+	padding: 1em;
+}
+
+#preview {
+	width:100%;
+	max-width: 880px;
+	margin: 0 auto;
 }
 
 #editor {
