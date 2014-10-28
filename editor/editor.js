@@ -61,7 +61,18 @@ function scrollPreview() {
   previewContainer.scrollTop(scroll);
 }
 
+function scrollEditor() {
+	var ratio = previewContainer.scrollTop() / (previewContainer[0].scrollHeight - previewContainer.height());
+	var scroll = Math.ceil(ratio*(editor.getSession().getLength() - editor.getLastVisibleRow() + editor.getFirstVisibleRow() + 2));
+	editor.scrollToLine(scroll, false, false);
+}
+
 editor.getSession().on('change', updatePreview);
 editor.getSession().on('changeScrollTop', function() {
 	setTimeout(scrollPreview, 0);
 })
+//previewContainer.scroll(function() {
+//	setTimeout(scrollEditor, 0);
+//});
+
+updatePreview();
