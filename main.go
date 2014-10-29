@@ -4,7 +4,6 @@ import (
 	"code.google.com/p/go.crypto/bcrypt"
 	"bufio"
 	"bytes"
-	"errors"
 	"encoding/base64"
 	"encoding/gob"
 	"flag"
@@ -26,18 +25,31 @@ import (
 var h1RegEx = regexp.MustCompile("<[\\w]*h1.*>(.*)</[\\w]*h1[\\w]*>")
 
 func main() {
-	var home, relDocsDirPath, relEditorDirPath string
+	var unsanitiedUserFilePath, unsanitisedDocsDirPath, unsanitiedEditorDirPath string
 	var port int
 	var isAddUser bool
 
-	flag.StringVar(&home, "home", "/opt/docserver", "The root directory from which all other paths are relative.")
-	flag.StringVar(&relDocsDirPath, "docsdir", "content", "Directory that contains all the documentation.")
-	flag.StringVar(&relEditorDirPath, "editor", "editor", "Directory that contains the editor files.")
+	flag.StringVar(&unsanitiedUserFilePath, "users", "users", "Files containing users data.")
+	flag.StringVar(&unsanitisedDocsDirPath, "docsdir", "content", "Directory that contains all the documentation.")
+	flag.StringVar(&unsanitiedEditorDirPath, "editordir", "editor", "Directory that contains the editor files.")
 	flag.IntVar(&port, "port", 9000, "The port to bind the server to.")
 	flag.BoolVar(&isAddUser, "adduser", false, "Instead of running the doc server, add a user to the password file.")
 	flag.Parse()
 
-	usersFile := filepath.Join(home, "users")
+	if unsanitiedUserFilePath == "" {
+		flag.PrintDefaults()
+		return
+	}
+
+	usersFile, dir, err := sanitisePath(unsanitiedUserFilePath)
+	if err != nil {
+		log.Println(fmt.Sprintf("Failed to open users file for reading: %v, %v", unsanitiedUserFilePath, err))
+		return
+	}
+	if(dir) {
+		log.Println(fmt.Sprintf("Specified users file is a directory: %v", unsanitiedUserFilePath))
+		return
+	}
 
 	users, err := decodeUserFile(usersFile)
 	if err != nil {
@@ -53,22 +65,28 @@ func main() {
 		return
 	}
 
-	if home == "" || relDocsDirPath == "" || relEditorDirPath == "" || port <= 0 || port > 65535 {
+	if unsanitisedDocsDirPath == "" || unsanitiedEditorDirPath == "" || port <= 0 || port > 65535 {
 		flag.PrintDefaults()
 		return
 	}
 
-	unsanitisedDocsDirPath := filepath.Join(home, relDocsDirPath)
-	docsDirPath, err := sanitisePath(unsanitisedDocsDirPath)
+	docsDirPath, dir, err := sanitisePath(unsanitisedDocsDirPath)
 	if err != nil {
-		log.Println(fmt.Sprintf("Failed to open docs directory for reading: %v, %v", docsDirPath, err))
+		log.Println(fmt.Sprintf("Failed to open docs directory for reading: %v, %v", unsanitisedDocsDirPath, err))
+		return
+	}
+	if(!dir) {
+		log.Println(fmt.Sprintf("Specified docs path is not a directory: %v", unsanitisedDocsDirPath))
 		return
 	}
 
-	unsanitiedEditorDirPath := filepath.Join(home, relEditorDirPath)
-	editorDirPath, err := sanitisePath(unsanitiedEditorDirPath)
+	editorDirPath, dir, err := sanitisePath(unsanitiedEditorDirPath)
 	if err != nil {
-		log.Println(fmt.Sprintf("Failed to open editor directory for reading: %v, %v", editorDirPath, err))
+		log.Println(fmt.Sprintf("Failed to open editor directory for reading: %v, %v", unsanitiedEditorDirPath, err))
+		return
+	}
+	if(!dir) {
+		log.Println(fmt.Sprintf("Specified editor path is not a directory: %v", unsanitiedEditorDirPath))
 		return
 	}
 
@@ -199,23 +217,19 @@ func (h *MarkdownHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
-func sanitisePath(path string) (string, error) {
+func sanitisePath(path string) (string, bool, error) {
 	directory, err := os.Open(path)
 	defer directory.Close()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	fi, err := directory.Stat()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
-	if !fi.IsDir() {
-		return "", errors.New("Path is not directory")
-	}
-
-	return directory.Name(), nil
+	return directory.Name(), fi.IsDir(), nil
 }
 
 func addUser(path string, usersMap map[string][]byte) {
