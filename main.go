@@ -25,7 +25,7 @@ import (
 var h1RegEx = regexp.MustCompile("<[\\w]*h1.*>(.*)</[\\w]*h1[\\w]*>")
 
 func main() {
-	var unsanitiedUserFilePath, unsanitisedDocsDirPath, unsanitiedEditorDirPath string
+	var unsanitiedUserFilePath, unsanitisedDocsDirPath, unsanitiedEditorDirPath, fileExtWhitelistStr string
 	var port int
 	var isAddUser bool
 
@@ -34,6 +34,7 @@ func main() {
 	flag.StringVar(&unsanitiedEditorDirPath, "editordir", "editor", "Directory that contains the editor files.")
 	flag.IntVar(&port, "port", 9000, "The port to bind the server to.")
 	flag.BoolVar(&isAddUser, "adduser", false, "Instead of running the doc server, add a user to the password file.")
+	flag.StringVar(&fileExtWhitelistStr, "editablefileext", "md,html,css,js,txt,csv,java", "A comma seperated list of editable file extensions.")
 	flag.Parse()
 
 	if unsanitiedUserFilePath == "" {
@@ -90,6 +91,14 @@ func main() {
 		return
 	}
 
+	fileExtWhitelistMap := make(map[string]struct{})
+	for _, ext := range strings.Split(fileExtWhitelistStr, ",") {
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		fileExtWhitelistMap[ext] = struct{}{}
+	}
+
 	editServer := http.FileServer(http.Dir(editorDirPath))
 	fileServer := http.FileServer(http.Dir(docsDirPath))
 
@@ -99,89 +108,67 @@ func main() {
 		EditorRoot: editorDirPath,
 		FileServer: fileServer,
 		EditServer: editServer,
-		Users: users})
+		Users: users,
+		EditableFileWhitelist: fileExtWhitelistMap,
+		})
 
 	log.Fatal(http.ListenAndServe(":"+strconv.Itoa(port), nil))
 }
 
 type MarkdownHandler struct {
-	FileServer http.Handler
-	EditServer http.Handler
-	DocRoot    string
-	EditorRoot string
-	Users      map[string][]byte
+	FileServer 				http.Handler
+	EditServer 				http.Handler
+	DocRoot    				string
+	EditorRoot 				string
+	Users      				map[string][]byte
+	EditableFileWhitelist	map[string]struct{}
 }
 
 func (h *MarkdownHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	rp := r.URL.Path
-
-	var hasMdFile = false
-	var filename, mdUrl string
-	if strings.HasSuffix(rp, ".html") {
-		mdUrl = strings.TrimSuffix(rp, ".html") + ".md"
-		filename = filepath.Join(h.DocRoot, mdUrl)
-
-		if _, err := os.Stat(filename); err == nil {
-			hasMdFile = true
-		}
+	path := r.URL.Path
+	if strings.HasSuffix(path, "/") {
+		path += "index.html"
 	}
-
-	if !hasMdFile {
-		filename = filepath.Join(h.DocRoot, rp)
-	}
+	filename := filepath.Join(h.DocRoot, path)
 
 	if r.Method == "POST" {
-		if requiresAuth(w, r, h.Users) {
-			return
-		}
-
-		if err := os.MkdirAll(filepath.Dir(filename), 0744); err != nil {
-			log.Printf("Error making directories: %v %v", filename, err)
-			return
-		}
-
-		body, err := ioutil.ReadAll(r.Body)
-		if err == nil {
-			ioutil.WriteFile(filename, body, 0644)
-		}
+		h.save(w, r, filename)
 		return
-	}
+	}	
 
 	r.ParseForm()
 	_, editMode := r.Form["edit"]
 
 	if editMode {
-		if requiresAuth(w, r, h.Users) {
-			return
-		}
-
-		if hasMdFile {
-			w.Header()["Location"] = []string{fmt.Sprintf("%s?%s", mdUrl, r.URL.RawQuery)}
-			w.WriteHeader(http.StatusFound)
-		}
-		w.Header()["Content-Type"] = []string{"text/html"}
-
-		editorHtml := filepath.Join(h.EditorRoot, "editor.html")
-		t, _ := htmltemplate.ParseFiles(editorHtml)
-
-		content, _ := ioutil.ReadFile(filename)
-
-		data := make(map[string]string)
-		data["path"] = rp
-		data["content"] = string(content)
-
-		t.Execute(w, data)
-		return
+		h.editor(w, r, filename, path)
+	} else {
+		h.serve(w, r, filename)
 	}
+}
 
-	if !hasMdFile {
+
+func (h *MarkdownHandler) serve(w http.ResponseWriter, r *http.Request, filename string) {
+	if _, err := os.Stat(filename); err == nil {
 		h.FileServer.ServeHTTP(w, r)
 		return
 	}
 
+	if strings.HasSuffix(filename, ".html") {
+		mdFile := strings.TrimSuffix(filename, ".html") + ".md";
+		if _, err := os.Stat(mdFile); err == nil {
+			h.serveMarkdown(w, r, mdFile)
+			return
+		}
+	}
+
+	w.WriteHeader(http.StatusNotFound);
+}
+
+func (h *MarkdownHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, mdFile string) {
 	w.Header()["Content-Type"] = []string{"text/html"}
 
-	flags := blackfriday.HTML_TOC | blackfriday.HTML_GITHUB_BLOCKCODE
+	//flags := blackfriday.HTML_TOC | blackfriday.HTML_GITHUB_BLOCKCODE
+	flags := blackfriday.HTML_TOC
 
 	extensions := 0
 	extensions |= blackfriday.EXTENSION_NO_INTRA_EMPHASIS
@@ -191,7 +178,7 @@ func (h *MarkdownHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	extensions |= blackfriday.EXTENSION_STRIKETHROUGH
 	extensions |= blackfriday.EXTENSION_SPACE_HEADERS
 
-	body, _ := ioutil.ReadFile(filename)
+	body, _ := ioutil.ReadFile(mdFile)
 	output := blackfriday.Markdown(body, blackfriday.HtmlRenderer(flags, "", ""), extensions)
 
 	navClosingTag := []byte{'<', '/', 'n', 'a', 'v', '>'}
@@ -214,8 +201,63 @@ func (h *MarkdownHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	t, _ := template.ParseFiles(filepath.Join(h.DocRoot, "template.html"))
 
 	t.Execute(w, data)
+}
+
+func (h *MarkdownHandler) editor(w http.ResponseWriter, r *http.Request, filename string, path string) {
+	if requiresAuth(w, r, h.Users) || blockedFileExt(w, h.EditableFileWhitelist, filename) {
+		return
+	}
+
+	if _, err := os.Stat(filename); err == nil {
+		h.serveEditor(w, filename, path)
+		return
+	}
+
+	if strings.HasSuffix(filename, ".html") {
+		mdFile := strings.TrimSuffix(filename, ".html") + ".md";
+		if _, err := os.Stat(mdFile); err == nil {
+			mdPath := strings.TrimSuffix(path, ".html") + ".md";
+			w.Header()["Location"] = []string{fmt.Sprintf("%s?%s", mdPath, r.URL.RawQuery)}
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+	}
+
+	h.serveEditor(w, filename, path)
+}
+
+func (h *MarkdownHandler) serveEditor(w http.ResponseWriter, filename string, path string) {
+	w.Header()["Content-Type"] = []string{"text/html"}
+
+	editorHtml := filepath.Join(h.EditorRoot, "editor.html")
+	t, _ := htmltemplate.ParseFiles(editorHtml)
+
+	content, _ := ioutil.ReadFile(filename)
+
+	data := make(map[string]string)
+	data["path"] = path
+	data["content"] = string(content)
+
+	t.Execute(w, data)
+}
+
+func (h *MarkdownHandler) save(w http.ResponseWriter, r *http.Request, filename string) {
+	if requiresAuth(w, r, h.Users) || blockedFileExt(w, h.EditableFileWhitelist, filename) {
+		return
+	}
+
+	if err := os.MkdirAll(filepath.Dir(filename), 0744); err != nil {
+		log.Printf("Error making directories: %v %v", filename, err)
+		return
+	}
+
+	body, err := ioutil.ReadAll(r.Body)
+	if err == nil {
+		ioutil.WriteFile(filename, body, 0644)
+	}
 	return
 }
+
 
 func sanitisePath(path string) (string, bool, error) {
 	directory, err := os.Open(path)
@@ -320,6 +362,13 @@ func requiresAuth(w http.ResponseWriter, r *http.Request, users map[string][]byt
 
 func sendAuthHeaders(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", `Basic realm="editdocs"`)
-	w.WriteHeader(401)
-	w.Write([]byte("401 Unauthorized\n"))
+	w.WriteHeader(http.StatusUnauthorized)
+}
+
+func blockedFileExt(w http.ResponseWriter, whiteList map[string]struct{}, path string) bool {
+	if _, ok := whiteList[filepath.Ext(path)]; !ok {
+		w.WriteHeader(http.StatusNotImplemented)
+		return true
+	}
+	return false
 }
